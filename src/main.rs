@@ -1,7 +1,24 @@
 use eframe::egui;
+use rand::{Rng, RngExt};
 use std::time::Instant;
 
-const CIRCLE_RADIUS: f32 = 24.0;
+const SQUARE_SIZE: f32 = 80.0;
+const SIDE_MARGIN: f32 = 48.0;
+const SHOT_FADE_SECONDS: f32 = 1.25;
+const HIT_CHANCE: f32 = 0.6;
+const MISS_OFFSET_MIN: f32 = 12.0;
+const MISS_OFFSET_MAX: f32 = 52.0;
+const MAX_HEALTH: u8 = 100;
+const SHOT_DAMAGE: u8 = 10;
+const HEALTH_BAR_HEIGHT: f32 = 8.0;
+const HEALTH_BAR_GAP: f32 = 10.0;
+const SQUARE_FADE_SECONDS: f32 = 1.0;
+
+struct ShotLine {
+    start: egui::Pos2,
+    end: egui::Pos2,
+    fired_at: Instant,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Screen {
@@ -11,28 +28,73 @@ enum Screen {
 
 struct NovaApp {
     screen: Screen,
-    circle_pos: Option<egui::Pos2>,
-    circle_velocity: egui::Vec2,
-    last_update: Instant,
+    shot_lines: Vec<ShotLine>,
+    left_health: u8,
+    right_health: u8,
+    left_destroyed_at: Option<Instant>,
+    right_destroyed_at: Option<Instant>,
 }
 
 impl Default for NovaApp {
     fn default() -> Self {
         Self {
             screen: Screen::Menu,
-            circle_pos: None,
-            circle_velocity: egui::vec2(240.0, 180.0),
-            last_update: Instant::now(),
+            shot_lines: Vec::new(),
+            left_health: MAX_HEALTH,
+            right_health: MAX_HEALTH,
+            left_destroyed_at: None,
+            right_destroyed_at: None,
         }
     }
 }
 
+fn random_point_in_rect(rect: egui::Rect, rng: &mut impl Rng) -> egui::Pos2 {
+    egui::pos2(
+        rng.random_range(rect.left()..=rect.right()),
+        rng.random_range(rect.top()..=rect.bottom()),
+    )
+}
+
+fn random_point_near_rect_outside(rect: egui::Rect, rng: &mut impl Rng) -> egui::Pos2 {
+    let offset = rng.random_range(MISS_OFFSET_MIN..=MISS_OFFSET_MAX);
+    match rng.random_range(0..4) {
+        0 => egui::pos2(
+            rect.left() - offset,
+            rng.random_range((rect.top() - offset)..=(rect.bottom() + offset)),
+        ),
+        1 => egui::pos2(
+            rect.right() + offset,
+            rng.random_range((rect.top() - offset)..=(rect.bottom() + offset)),
+        ),
+        2 => egui::pos2(
+            rng.random_range((rect.left() - offset)..=(rect.right() + offset)),
+            rect.top() - offset,
+        ),
+        _ => egui::pos2(
+            rng.random_range((rect.left() - offset)..=(rect.right() + offset)),
+            rect.bottom() + offset,
+        ),
+    }
+}
+
+fn fade_alpha(destroyed_at: Option<Instant>, now: Instant) -> u8 {
+    if let Some(destroyed_at) = destroyed_at {
+        let elapsed = (now - destroyed_at).as_secs_f32();
+        let opacity = (1.0 - (elapsed / SQUARE_FADE_SECONDS)).clamp(0.0, 1.0);
+        (opacity * 255.0) as u8
+    } else {
+        255
+    }
+}
+
+fn is_still_fading(destroyed_at: Option<Instant>, now: Instant) -> bool {
+    destroyed_at
+        .map(|destroyed_at| (now - destroyed_at).as_secs_f32() < SQUARE_FADE_SECONDS)
+        .unwrap_or(false)
+}
+
 impl eframe::App for NovaApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        let now = Instant::now();
-        let dt = (now - self.last_update).as_secs_f32();
-        self.last_update = now;
-
         match self.screen {
             Screen::Menu => {
                 egui::CentralPanel::default().show(ctx, |ui| {
@@ -47,8 +109,11 @@ impl eframe::App for NovaApp {
 
                         if ui.button("Sandbox").clicked() {
                             self.screen = Screen::Sandbox;
-                            self.circle_pos = None;
-                            self.last_update = Instant::now();
+                            self.shot_lines.clear();
+                            self.left_health = MAX_HEALTH;
+                            self.right_health = MAX_HEALTH;
+                            self.left_destroyed_at = None;
+                            self.right_destroyed_at = None;
                         }
 
                         if ui.button("Quit").clicked() {
@@ -58,42 +123,165 @@ impl eframe::App for NovaApp {
                 });
             }
             Screen::Sandbox => {
+                let now = Instant::now();
+                self.shot_lines.retain(|line| {
+                    (now - line.fired_at).as_secs_f32() < SHOT_FADE_SECONDS
+                });
+
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    let bounds = ui.max_rect();
+                    let mut fire_clicked = false;
+                    ui.horizontal(|ui| {
+                        fire_clicked = ui.button("Fire").clicked();
 
-                    let mut circle_pos = self.circle_pos.unwrap_or(bounds.center());
-                    circle_pos += self.circle_velocity * dt;
+                        if ui.button("Back").clicked() {
+                            self.screen = Screen::Menu;
+                        }
+                    });
 
-                    if circle_pos.x - CIRCLE_RADIUS <= bounds.left() && self.circle_velocity.x < 0.0 {
-                        circle_pos.x = bounds.left() + CIRCLE_RADIUS;
-                        self.circle_velocity.x = -self.circle_velocity.x;
-                    } else if circle_pos.x + CIRCLE_RADIUS >= bounds.right()
-                        && self.circle_velocity.x > 0.0
-                    {
-                        circle_pos.x = bounds.right() - CIRCLE_RADIUS;
-                        self.circle_velocity.x = -self.circle_velocity.x;
+                    ui.add_space(8.0);
+                    let bounds = ui.available_rect_before_wrap();
+                    let square_size = egui::vec2(SQUARE_SIZE, SQUARE_SIZE);
+
+                    let left_center = egui::pos2(
+                        bounds.left() + SIDE_MARGIN + (SQUARE_SIZE * 0.5),
+                        bounds.center().y,
+                    );
+                    let right_center = egui::pos2(
+                        bounds.right() - SIDE_MARGIN - (SQUARE_SIZE * 0.5),
+                        bounds.center().y,
+                    );
+
+                    let left_square = egui::Rect::from_center_size(left_center, square_size);
+                    let right_square = egui::Rect::from_center_size(right_center, square_size);
+
+                    if fire_clicked {
+                        let mut rng = rand::rng();
+                        let fired_at = Instant::now();
+
+                        let left_hit = rng.random_bool(HIT_CHANCE as f64);
+                        let left_target = if left_hit {
+                            random_point_in_rect(right_square, &mut rng)
+                        } else {
+                            random_point_near_rect_outside(right_square, &mut rng)
+                        };
+
+                        let right_hit = rng.random_bool(HIT_CHANCE as f64);
+                        let right_target = if right_hit {
+                            random_point_in_rect(left_square, &mut rng)
+                        } else {
+                            random_point_near_rect_outside(left_square, &mut rng)
+                        };
+
+                        if left_hit {
+                            self.right_health = self.right_health.saturating_sub(SHOT_DAMAGE);
+                            if self.right_health == 0 && self.right_destroyed_at.is_none() {
+                                self.right_destroyed_at = Some(fired_at);
+                            }
+                        }
+                        if right_hit {
+                            self.left_health = self.left_health.saturating_sub(SHOT_DAMAGE);
+                            if self.left_health == 0 && self.left_destroyed_at.is_none() {
+                                self.left_destroyed_at = Some(fired_at);
+                            }
+                        }
+
+                        self.shot_lines.push(ShotLine {
+                            start: left_center,
+                            end: left_target,
+                            fired_at,
+                        });
+                        self.shot_lines.push(ShotLine {
+                            start: right_center,
+                            end: right_target,
+                            fired_at,
+                        });
                     }
 
-                    if circle_pos.y - CIRCLE_RADIUS <= bounds.top() && self.circle_velocity.y < 0.0 {
-                        circle_pos.y = bounds.top() + CIRCLE_RADIUS;
-                        self.circle_velocity.y = -self.circle_velocity.y;
-                    } else if circle_pos.y + CIRCLE_RADIUS >= bounds.bottom()
-                        && self.circle_velocity.y > 0.0
-                    {
-                        circle_pos.y = bounds.bottom() - CIRCLE_RADIUS;
-                        self.circle_velocity.y = -self.circle_velocity.y;
-                    }
+                    let left_alpha = fade_alpha(self.left_destroyed_at, now);
+                    let right_alpha = fade_alpha(self.right_destroyed_at, now);
 
-                    self.circle_pos = Some(circle_pos);
+                    ui.painter().rect_filled(
+                        left_square,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(80, 180, 255, left_alpha),
+                    );
+                    ui.painter().rect_filled(
+                        right_square,
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(80, 255, 160, right_alpha),
+                    );
+
+                    let left_bar = egui::Rect::from_min_size(
+                        egui::pos2(
+                            left_square.left(),
+                            left_square.top() - HEALTH_BAR_GAP - HEALTH_BAR_HEIGHT,
+                        ),
+                        egui::vec2(SQUARE_SIZE, HEALTH_BAR_HEIGHT),
+                    );
+                    let right_bar = egui::Rect::from_min_size(
+                        egui::pos2(
+                            right_square.left(),
+                            right_square.top() - HEALTH_BAR_GAP - HEALTH_BAR_HEIGHT,
+                        ),
+                        egui::vec2(SQUARE_SIZE, HEALTH_BAR_HEIGHT),
+                    );
+
                     ui.painter()
-                        .circle_filled(circle_pos, CIRCLE_RADIUS, egui::Color32::from_rgb(80, 180, 255));
+                        .rect_filled(
+                            left_bar,
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(185, 35, 35, left_alpha),
+                        );
+                    ui.painter()
+                        .rect_filled(
+                            right_bar,
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(185, 35, 35, right_alpha),
+                        );
 
-                    if ui.button("Back").clicked() {
-                        self.screen = Screen::Menu;
+                    let left_green_width = SQUARE_SIZE * (self.left_health as f32 / MAX_HEALTH as f32);
+                    let right_green_width = SQUARE_SIZE * (self.right_health as f32 / MAX_HEALTH as f32);
+
+                    let left_green_bar = egui::Rect::from_min_size(
+                        left_bar.left_top(),
+                        egui::vec2(left_green_width, HEALTH_BAR_HEIGHT),
+                    );
+                    let right_green_bar = egui::Rect::from_min_size(
+                        right_bar.left_top(),
+                        egui::vec2(right_green_width, HEALTH_BAR_HEIGHT),
+                    );
+
+                    ui.painter()
+                        .rect_filled(
+                            left_green_bar,
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(40, 210, 80, left_alpha),
+                        );
+                    ui.painter()
+                        .rect_filled(
+                            right_green_bar,
+                            0.0,
+                            egui::Color32::from_rgba_unmultiplied(40, 210, 80, right_alpha),
+                        );
+
+                    for line in &self.shot_lines {
+                        let elapsed = (now - line.fired_at).as_secs_f32();
+                        let alpha = ((1.0 - (elapsed / SHOT_FADE_SECONDS)).clamp(0.0, 1.0) * 255.0) as u8;
+                        ui.painter().line_segment(
+                            [line.start, line.end],
+                            egui::Stroke::new(
+                                2.0,
+                                egui::Color32::from_rgba_unmultiplied(255, 120, 120, alpha),
+                            ),
+                        );
                     }
                 });
 
-                ctx.request_repaint();
+                let left_fading = is_still_fading(self.left_destroyed_at, now);
+                let right_fading = is_still_fading(self.right_destroyed_at, now);
+                if !self.shot_lines.is_empty() || left_fading || right_fading {
+                    ctx.request_repaint();
+                }
             }
         }
     }
