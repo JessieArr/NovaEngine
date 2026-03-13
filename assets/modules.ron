@@ -1,0 +1,72 @@
+(
+    modules: [
+        (
+            id: "shield_mk1",
+            display_name: "Shield Generator Mk I",
+            kind: ShieldGenerator,
+            max_hp: 120,
+            attributes: {
+                "regen_per_sec": 4.0,
+                "capacity": 180.0,
+                "power_draw": 12.0,
+            },
+        ),
+        (
+            id: "gun_pulse_mk1",
+            display_name: "Pulse Cannon Mk I",
+            kind: Gun,
+            max_hp: 90,
+            attributes: {
+                "damage": 16.0,
+                "fire_rate": 1.6,
+                "range": 14.0,
+                "power_draw": 8.0,
+            },
+        ),
+        (
+            id: "missile_rack_mk1",
+            display_name: "Missile Rack Mk I",
+            kind: MissileLauncher,
+            max_hp: 100,
+            attributes: {
+                "salvo_size": 2.0,
+                "reload_sec": 4.5,
+                "range": 22.0,
+                "power_draw": 10.0,
+            },
+        ),
+        (
+            id: "sensor_array_mk1",
+            display_name: "Sensor Array Mk I",
+            kind: Sensor,
+            max_hp: 70,
+            attributes: {
+                "scan_range": 30.0,
+                "target_lock_bonus": 0.12,
+                "power_draw": 6.0,
+            },
+        ),
+        (
+            id: "sensor_array_mk2",
+            display_name: "Sensor Array Mk II",
+            kind: Sensor,
+            max_hp: 85,
+            attributes: {
+                "scan_range": 40.0,
+                "target_lock_bonus": 0.20,
+                "power_draw": 9.0,
+            },
+        ),
+        (
+            id: "countermeasure_pod",
+            display_name: "Countermeasure Pod",
+            kind: Utility,
+            max_hp: 75,
+            attributes: {
+                "jam_strength": 0.25,
+                "cooldown_sec": 7.0,
+                "power_draw": 5.0,
+            },
+        ),
+    ],
+)

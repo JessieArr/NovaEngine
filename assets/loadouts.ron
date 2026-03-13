@@ -1,0 +1,16 @@
+(
+    loadouts: [
+        (
+            id: "corvette_single_gun",
+            ship_id: "corvette",
+            slots: [
+                (
+                    x: 0,
+                    y: 0,
+                    armor_layers: 1,
+                    module_id: Some("gun_pulse_mk1"),
+                ),
+            ],
+        ),
+    ],
+)

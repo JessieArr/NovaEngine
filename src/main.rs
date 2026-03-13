@@ -1,18 +1,21 @@
+mod data;
+mod domain;
+
+use crate::data::module_catalog::ModuleCatalog;
+use crate::domain::module::ModuleKind;
+use crate::domain::ship::Ship;
 use eframe::egui;
-use rand::{Rng, RngExt};
+use rand::{rngs::ThreadRng, RngExt};
 use std::time::Instant;
 
-const SQUARE_SIZE: f32 = 80.0;
-const SIDE_MARGIN: f32 = 48.0;
+const SHIP_BG_SIZE: f32 = 260.0;
+const MODULE_INSET: f32 = 24.0;
+const MODULE_GAP: f32 = 8.0;
 const SHOT_FADE_SECONDS: f32 = 1.25;
 const HIT_CHANCE: f32 = 0.6;
+const SHOT_DAMAGE: u32 = 10;
 const MISS_OFFSET_MIN: f32 = 12.0;
 const MISS_OFFSET_MAX: f32 = 52.0;
-const MAX_HEALTH: u8 = 100;
-const SHOT_DAMAGE: u8 = 10;
-const HEALTH_BAR_HEIGHT: f32 = 8.0;
-const HEALTH_BAR_GAP: f32 = 10.0;
-const SQUARE_FADE_SECONDS: f32 = 1.0;
 
 struct ShotLine {
     start: egui::Pos2,
@@ -29,68 +32,68 @@ enum Screen {
 struct NovaApp {
     screen: Screen,
     shot_lines: Vec<ShotLine>,
-    left_health: u8,
-    right_health: u8,
-    left_destroyed_at: Option<Instant>,
-    right_destroyed_at: Option<Instant>,
+    module_catalog: Option<ModuleCatalog>,
+    left_ship_base: Option<Ship>,
+    right_ship_base: Option<Ship>,
+    left_ship: Option<Ship>,
+    right_ship: Option<Ship>,
 }
 
-impl Default for NovaApp {
-    fn default() -> Self {
+impl NovaApp {
+    fn new(module_catalog: Option<ModuleCatalog>, left_ship: Option<Ship>, right_ship: Option<Ship>) -> Self {
         Self {
             screen: Screen::Menu,
             shot_lines: Vec::new(),
-            left_health: MAX_HEALTH,
-            right_health: MAX_HEALTH,
-            left_destroyed_at: None,
-            right_destroyed_at: None,
+            module_catalog,
+            left_ship_base: left_ship.clone(),
+            right_ship_base: right_ship.clone(),
+            left_ship,
+            right_ship,
         }
     }
-}
 
-fn random_point_in_rect(rect: egui::Rect, rng: &mut impl Rng) -> egui::Pos2 {
-    egui::pos2(
-        rng.random_range(rect.left()..=rect.right()),
-        rng.random_range(rect.top()..=rect.bottom()),
-    )
-}
-
-fn random_point_near_rect_outside(rect: egui::Rect, rng: &mut impl Rng) -> egui::Pos2 {
-    let offset = rng.random_range(MISS_OFFSET_MIN..=MISS_OFFSET_MAX);
-    match rng.random_range(0..4) {
-        0 => egui::pos2(
-            rect.left() - offset,
-            rng.random_range((rect.top() - offset)..=(rect.bottom() + offset)),
-        ),
-        1 => egui::pos2(
-            rect.right() + offset,
-            rng.random_range((rect.top() - offset)..=(rect.bottom() + offset)),
-        ),
-        2 => egui::pos2(
-            rng.random_range((rect.left() - offset)..=(rect.right() + offset)),
-            rect.top() - offset,
-        ),
-        _ => egui::pos2(
-            rng.random_range((rect.left() - offset)..=(rect.right() + offset)),
-            rect.bottom() + offset,
-        ),
+    fn slot_rect(ship_rect: egui::Rect, ship_size: usize, slot_index: usize) -> egui::Rect {
+        let x = slot_index % ship_size;
+        let y = slot_index / ship_size;
+        let inner = ship_rect.shrink(MODULE_INSET);
+        let ship_size_f = ship_size as f32;
+        let cell_w = (inner.width() - ((ship_size_f - 1.0) * MODULE_GAP)) / ship_size_f;
+        let cell_h = (inner.height() - ((ship_size_f - 1.0) * MODULE_GAP)) / ship_size_f;
+        let min = egui::pos2(
+            inner.left() + (x as f32 * (cell_w + MODULE_GAP)),
+            inner.top() + (y as f32 * (cell_h + MODULE_GAP)),
+        );
+        egui::Rect::from_min_size(min, egui::vec2(cell_w, cell_h))
     }
-}
 
-fn fade_alpha(destroyed_at: Option<Instant>, now: Instant) -> u8 {
-    if let Some(destroyed_at) = destroyed_at {
-        let elapsed = (now - destroyed_at).as_secs_f32();
-        let opacity = (1.0 - (elapsed / SQUARE_FADE_SECONDS)).clamp(0.0, 1.0);
-        (opacity * 255.0) as u8
-    } else {
-        255
+    fn random_point_in_rect(rect: egui::Rect, rng: &mut ThreadRng) -> egui::Pos2 {
+        egui::pos2(
+            rng.random_range(rect.left()..=rect.right()),
+            rng.random_range(rect.top()..=rect.bottom()),
+        )
     }
-}
 
-fn is_still_fading(destroyed_at: Option<Instant>, now: Instant) -> bool {
-    destroyed_at
-        .map(|destroyed_at| (now - destroyed_at).as_secs_f32() < SQUARE_FADE_SECONDS)
-        .unwrap_or(false)
+    fn random_point_near_rect_outside(rect: egui::Rect, rng: &mut ThreadRng) -> egui::Pos2 {
+        let offset = rng.random_range(MISS_OFFSET_MIN..=MISS_OFFSET_MAX);
+        match rng.random_range(0..4) {
+            0 => egui::pos2(
+                rect.left() - offset,
+                rng.random_range((rect.top() - offset)..=(rect.bottom() + offset)),
+            ),
+            1 => egui::pos2(
+                rect.right() + offset,
+                rng.random_range((rect.top() - offset)..=(rect.bottom() + offset)),
+            ),
+            2 => egui::pos2(
+                rng.random_range((rect.left() - offset)..=(rect.right() + offset)),
+                rect.top() - offset,
+            ),
+            _ => egui::pos2(
+                rng.random_range((rect.left() - offset)..=(rect.right() + offset)),
+                rect.bottom() + offset,
+            ),
+        }
+    }
 }
 
 impl eframe::App for NovaApp {
@@ -110,10 +113,8 @@ impl eframe::App for NovaApp {
                         if ui.button("Sandbox").clicked() {
                             self.screen = Screen::Sandbox;
                             self.shot_lines.clear();
-                            self.left_health = MAX_HEALTH;
-                            self.right_health = MAX_HEALTH;
-                            self.left_destroyed_at = None;
-                            self.right_destroyed_at = None;
+                            self.left_ship = self.left_ship_base.clone();
+                            self.right_ship = self.right_ship_base.clone();
                         }
 
                         if ui.button("Quit").clicked() {
@@ -140,129 +141,183 @@ impl eframe::App for NovaApp {
 
                     ui.add_space(8.0);
                     let bounds = ui.available_rect_before_wrap();
-                    let square_size = egui::vec2(SQUARE_SIZE, SQUARE_SIZE);
 
-                    let left_center = egui::pos2(
-                        bounds.left() + SIDE_MARGIN + (SQUARE_SIZE * 0.5),
-                        bounds.center().y,
+                    let (left_ship, right_ship) = if let (Some(left_ship), Some(right_ship)) =
+                        (&self.left_ship, &self.right_ship)
+                    {
+                        (left_ship, right_ship)
+                    } else {
+                        ui.label("No ship loaded for sandbox.");
+                        return;
+                    };
+
+                    let center_y = bounds.center().y;
+                    let left_ship_rect = egui::Rect::from_center_size(
+                        egui::pos2(bounds.center().x - (SHIP_BG_SIZE * 0.8), center_y),
+                        egui::vec2(SHIP_BG_SIZE, SHIP_BG_SIZE),
                     );
-                    let right_center = egui::pos2(
-                        bounds.right() - SIDE_MARGIN - (SQUARE_SIZE * 0.5),
-                        bounds.center().y,
+                    let right_ship_rect = egui::Rect::from_center_size(
+                        egui::pos2(bounds.center().x + (SHIP_BG_SIZE * 0.8), center_y),
+                        egui::vec2(SHIP_BG_SIZE, SHIP_BG_SIZE),
                     );
 
-                    let left_square = egui::Rect::from_center_size(left_center, square_size);
-                    let right_square = egui::Rect::from_center_size(right_center, square_size);
+                    ui.painter().rect_filled(
+                        left_ship_rect,
+                        4.0,
+                        egui::Color32::from_rgb(45, 55, 72),
+                    );
+                    ui.painter().rect_stroke(
+                        left_ship_rect,
+                        4.0,
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(95, 105, 130)),
+                        egui::StrokeKind::Inside,
+                    );
+                    ui.painter().rect_filled(
+                        right_ship_rect,
+                        4.0,
+                        egui::Color32::from_rgb(45, 55, 72),
+                    );
+                    ui.painter().rect_stroke(
+                        right_ship_rect,
+                        4.0,
+                        egui::Stroke::new(2.0, egui::Color32::from_rgb(95, 105, 130)),
+                        egui::StrokeKind::Inside,
+                    );
 
-                    if fire_clicked {
-                        let mut rng = rand::rng();
-                        let fired_at = Instant::now();
+                    let mut left_gun_origins = Vec::new();
+                    let mut left_slot_rects = Vec::with_capacity(left_ship.slots.len());
+                    for (index, slot) in left_ship.slots.iter().enumerate() {
+                        let cell_rect = Self::slot_rect(left_ship_rect, left_ship.size, index);
+                        left_slot_rects.push(cell_rect);
+                        let mut fill = egui::Color32::from_rgb(70, 80, 95);
+                        if let Some(module) = &slot.module {
+                            let kind = self
+                                .module_catalog
+                                .as_ref()
+                                .and_then(|catalog| catalog.get(&module.archetype_id))
+                                .map(|archetype| &archetype.kind);
 
-                        let left_hit = rng.random_bool(HIT_CHANCE as f64);
-                        let left_target = if left_hit {
-                            random_point_in_rect(right_square, &mut rng)
-                        } else {
-                            random_point_near_rect_outside(right_square, &mut rng)
-                        };
+                            fill = match kind {
+                                Some(ModuleKind::Gun) => egui::Color32::from_rgb(215, 130, 80),
+                                Some(ModuleKind::ShieldGenerator) => egui::Color32::from_rgb(80, 155, 215),
+                                Some(ModuleKind::MissileLauncher) => egui::Color32::from_rgb(195, 95, 95),
+                                Some(ModuleKind::Sensor) => egui::Color32::from_rgb(95, 185, 150),
+                                Some(ModuleKind::Utility) => egui::Color32::from_rgb(130, 120, 210),
+                                None => egui::Color32::from_rgb(120, 120, 120),
+                            };
 
-                        let right_hit = rng.random_bool(HIT_CHANCE as f64);
-                        let right_target = if right_hit {
-                            random_point_in_rect(left_square, &mut rng)
-                        } else {
-                            random_point_near_rect_outside(left_square, &mut rng)
-                        };
-
-                        if left_hit {
-                            self.right_health = self.right_health.saturating_sub(SHOT_DAMAGE);
-                            if self.right_health == 0 && self.right_destroyed_at.is_none() {
-                                self.right_destroyed_at = Some(fired_at);
+                            if module.is_destroyed() {
+                                fill = egui::Color32::from_rgb(55, 55, 55);
+                            } else if matches!(kind, Some(ModuleKind::Gun)) {
+                                left_gun_origins.push(cell_rect.center());
                             }
                         }
-                        if right_hit {
-                            self.left_health = self.left_health.saturating_sub(SHOT_DAMAGE);
-                            if self.left_health == 0 && self.left_destroyed_at.is_none() {
-                                self.left_destroyed_at = Some(fired_at);
-                            }
-                        }
 
-                        self.shot_lines.push(ShotLine {
-                            start: left_center,
-                            end: left_target,
-                            fired_at,
-                        });
-                        self.shot_lines.push(ShotLine {
-                            start: right_center,
-                            end: right_target,
-                            fired_at,
-                        });
+                        ui.painter().rect_filled(cell_rect, 2.0, fill);
+                        ui.painter().rect_stroke(
+                            cell_rect,
+                            2.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(25, 25, 25)),
+                            egui::StrokeKind::Inside,
+                        );
                     }
 
-                    let left_alpha = fade_alpha(self.left_destroyed_at, now);
-                    let right_alpha = fade_alpha(self.right_destroyed_at, now);
+                    let mut right_gun_origins = Vec::new();
+                    let mut right_slot_rects = Vec::with_capacity(right_ship.slots.len());
+                    for (index, slot) in right_ship.slots.iter().enumerate() {
+                        let cell_rect = Self::slot_rect(right_ship_rect, right_ship.size, index);
+                        right_slot_rects.push(cell_rect);
+                        let mut fill = egui::Color32::from_rgb(70, 80, 95);
+                        if let Some(module) = &slot.module {
+                            let kind = self
+                                .module_catalog
+                                .as_ref()
+                                .and_then(|catalog| catalog.get(&module.archetype_id))
+                                .map(|archetype| &archetype.kind);
 
-                    ui.painter().rect_filled(
-                        left_square,
-                        0.0,
-                        egui::Color32::from_rgba_unmultiplied(80, 180, 255, left_alpha),
-                    );
-                    ui.painter().rect_filled(
-                        right_square,
-                        0.0,
-                        egui::Color32::from_rgba_unmultiplied(80, 255, 160, right_alpha),
-                    );
+                            fill = match kind {
+                                Some(ModuleKind::Gun) => egui::Color32::from_rgb(215, 130, 80),
+                                Some(ModuleKind::ShieldGenerator) => egui::Color32::from_rgb(80, 155, 215),
+                                Some(ModuleKind::MissileLauncher) => egui::Color32::from_rgb(195, 95, 95),
+                                Some(ModuleKind::Sensor) => egui::Color32::from_rgb(95, 185, 150),
+                                Some(ModuleKind::Utility) => egui::Color32::from_rgb(130, 120, 210),
+                                None => egui::Color32::from_rgb(120, 120, 120),
+                            };
 
-                    let left_bar = egui::Rect::from_min_size(
-                        egui::pos2(
-                            left_square.left(),
-                            left_square.top() - HEALTH_BAR_GAP - HEALTH_BAR_HEIGHT,
-                        ),
-                        egui::vec2(SQUARE_SIZE, HEALTH_BAR_HEIGHT),
-                    );
-                    let right_bar = egui::Rect::from_min_size(
-                        egui::pos2(
-                            right_square.left(),
-                            right_square.top() - HEALTH_BAR_GAP - HEALTH_BAR_HEIGHT,
-                        ),
-                        egui::vec2(SQUARE_SIZE, HEALTH_BAR_HEIGHT),
-                    );
+                            if module.is_destroyed() {
+                                fill = egui::Color32::from_rgb(55, 55, 55);
+                            } else if matches!(kind, Some(ModuleKind::Gun)) {
+                                right_gun_origins.push(cell_rect.center());
+                            }
+                        }
 
-                    ui.painter()
-                        .rect_filled(
-                            left_bar,
-                            0.0,
-                            egui::Color32::from_rgba_unmultiplied(185, 35, 35, left_alpha),
+                        ui.painter().rect_filled(cell_rect, 2.0, fill);
+                        ui.painter().rect_stroke(
+                            cell_rect,
+                            2.0,
+                            egui::Stroke::new(1.0, egui::Color32::from_rgb(25, 25, 25)),
+                            egui::StrokeKind::Inside,
                         );
-                    ui.painter()
-                        .rect_filled(
-                            right_bar,
-                            0.0,
-                            egui::Color32::from_rgba_unmultiplied(185, 35, 35, right_alpha),
-                        );
+                    }
 
-                    let left_green_width = SQUARE_SIZE * (self.left_health as f32 / MAX_HEALTH as f32);
-                    let right_green_width = SQUARE_SIZE * (self.right_health as f32 / MAX_HEALTH as f32);
+                    if fire_clicked {
+                        let fired_at = Instant::now();
+                        let mut rng = rand::rng();
 
-                    let left_green_bar = egui::Rect::from_min_size(
-                        left_bar.left_top(),
-                        egui::vec2(left_green_width, HEALTH_BAR_HEIGHT),
-                    );
-                    let right_green_bar = egui::Rect::from_min_size(
-                        right_bar.left_top(),
-                        egui::vec2(right_green_width, HEALTH_BAR_HEIGHT),
-                    );
+                        if let (Some(left_ship), Some(right_ship)) =
+                            (&mut self.left_ship, &mut self.right_ship)
+                        {
+                            for start in left_gun_origins {
+                                if right_slot_rects.is_empty() {
+                                    continue;
+                                }
 
-                    ui.painter()
-                        .rect_filled(
-                            left_green_bar,
-                            0.0,
-                            egui::Color32::from_rgba_unmultiplied(40, 210, 80, left_alpha),
-                        );
-                    ui.painter()
-                        .rect_filled(
-                            right_green_bar,
-                            0.0,
-                            egui::Color32::from_rgba_unmultiplied(40, 210, 80, right_alpha),
-                        );
+                                let target_idx = rng.random_range(0..right_slot_rects.len());
+                                let target_rect = right_slot_rects[target_idx];
+                                let hit = rng.random_bool(HIT_CHANCE as f64);
+                                let end = if hit {
+                                    Self::random_point_in_rect(target_rect, &mut rng)
+                                } else {
+                                    Self::random_point_near_rect_outside(target_rect, &mut rng)
+                                };
+
+                                self.shot_lines.push(ShotLine {
+                                    start,
+                                    end,
+                                    fired_at,
+                                });
+
+                                if hit {
+                                    let _ = right_ship.apply_hit(target_idx, SHOT_DAMAGE);
+                                }
+                            }
+
+                            for start in right_gun_origins {
+                                if left_slot_rects.is_empty() {
+                                    continue;
+                                }
+
+                                let target_idx = rng.random_range(0..left_slot_rects.len());
+                                let target_rect = left_slot_rects[target_idx];
+                                let hit = rng.random_bool(HIT_CHANCE as f64);
+                                let end = if hit {
+                                    Self::random_point_in_rect(target_rect, &mut rng)
+                                } else {
+                                    Self::random_point_near_rect_outside(target_rect, &mut rng)
+                                };
+
+                                self.shot_lines.push(ShotLine {
+                                    start,
+                                    end,
+                                    fired_at,
+                                });
+
+                                if hit {
+                                    let _ = left_ship.apply_hit(target_idx, SHOT_DAMAGE);
+                                }
+                            }
+                        }
+                    }
 
                     for line in &self.shot_lines {
                         let elapsed = (now - line.fired_at).as_secs_f32();
@@ -277,9 +332,7 @@ impl eframe::App for NovaApp {
                     }
                 });
 
-                let left_fading = is_still_fading(self.left_destroyed_at, now);
-                let right_fading = is_still_fading(self.right_destroyed_at, now);
-                if !self.shot_lines.is_empty() || left_fading || right_fading {
+                if !self.shot_lines.is_empty() {
                     ctx.request_repaint();
                 }
             }
@@ -288,11 +341,51 @@ impl eframe::App for NovaApp {
 }
 
 fn main() -> eframe::Result<()> {
+    let modules = match data::module_catalog::ModuleCatalog::from_path("assets/modules.ron") {
+        Ok(modules) => Some(modules),
+        Err(err) => {
+            eprintln!("Failed to load module catalog: {err}");
+            None
+        }
+    };
+    let ships = match data::ship_catalog::ShipCatalog::from_path("assets/ships.ron") {
+        Ok(ships) => Some(ships),
+        Err(err) => {
+            eprintln!("Failed to load ship catalog: {err}");
+            None
+        }
+    };
+    let loadouts = match data::loadout_catalog::LoadoutCatalog::from_path("assets/loadouts.ron") {
+        Ok(loadouts) => Some(loadouts),
+        Err(err) => {
+            eprintln!("Failed to load loadout catalog: {err}");
+            None
+        }
+    };
+
+    let sandbox_ship = if let (Some(modules), Some(ships), Some(loadouts)) = (&modules, &ships, &loadouts) {
+        match loadouts.instantiate_ship("corvette_single_gun", ships, modules) {
+            Ok(ship) => Some(ship),
+            Err(err) => {
+                eprintln!("Failed to instantiate default loadout: {err}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let options = eframe::NativeOptions::default();
 
     eframe::run_native(
         "Nova Engine",
         options,
-        Box::new(|_cc| Ok(Box::new(NovaApp::default()))),
+        Box::new(move |_cc| {
+            Ok(Box::new(NovaApp::new(
+                modules,
+                sandbox_ship.clone(),
+                sandbox_ship,
+            )))
+        }),
     )
 }

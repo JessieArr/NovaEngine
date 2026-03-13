@@ -1,0 +1,10 @@
+(
+    ships: [
+        (
+            id: "corvette",
+            display_name: "Corvette",
+            grid_size: 1,
+            max_modules: 1,
+        ),
+    ],
+)
